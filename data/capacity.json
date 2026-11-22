@@ -1,0 +1,9 @@
+{
+  "beams": 24,
+  "words": 80000,
+  "partitions": 32,
+  "grammar_states": 400,
+  "max_entries_per_partition": 16000,
+  "max_consumer_scratch_bytes": 262144,
+  "seed": 712
+}
