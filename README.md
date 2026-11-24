@@ -21,3 +21,45 @@ python -m unittest discover -s tests -v
 ```
 
 现有检查核对采集格式和所附数据的结构。
+
+## 分段 TopK 解码算子
+
+`segbeam` 把多轮解码做成可在 Python 解码侧重复调用的能力，直接接到模型导出循环上：
+
+```python
+from segbeam import SegmentedTopKSession, WorkOrderGrammar
+from segbeam.adapter import RoundPlan, run_round
+
+grammar = WorkOrderGrammar.from_record(records["grammar"])
+session = SegmentedTopKSession(grammar)
+beams = drafts                       # 带累积分、稳定身份、解析位置的当前草稿
+for round_record in rounds:          # 现场设定剩余步数与两池容量
+    plan = RoundPlan(remaining=..., beam_capacity=..., done_capacity=...,
+                     unseen=round_record["unseen"])
+    report = run_round(session, beams, plan, model_shards)  # 模型每导出一个打分块 feed 一次
+    beams = report.outcome.next_beams                       # 已定案的续写身份
+submission = session.submit()        # 提交有效完成命令，可回查词序列与来源草稿链
+```
+
+- **席位竞争**：候选只在其来源草稿能消费该词时参与竞争。同一规范操作序列且同一
+  语法状态等价类的候选竞争同一席位，同义写法不会挤掉本可续写的草稿；显示字符串
+  相同但后续合法范围不同的候选保留各自身份。偏好序为累积分高者优先，同分按完整
+  词 ID 序列字典序，再按来源 ID。
+- **两池**：能提前终止的命令进入完成池，语法允许继续接词时也占一个续写席位；
+  剩余步内到不了合法终态的候选不能占续写席位。以前各轮已定案的完成项继续参加
+  完成池竞争；完成池按完整规范工单身份归并，由较优实参路径提供可追查的词序列。
+- **定案**：分片全部到齐，或用 `unseen` 的可信分数上界与语法范围证明剩余分片
+  不能改变席位时，相应池才定案；同分时纯分数界不能提前排除未决路径。提前定案
+  所依赖的分片转入监视，迟到时仍按声明校验；超界或重发内容不一致报
+  `ShardInconsistency`，已提前定案的会话随之失效，后续草稿不能消费错误定案。
+  分片重发内容一致时是空操作，不会挤出其他草稿。
+- **缓冲**：局部缓冲只按席位身份归约候选，规模受语法（操作数 × 等价类数）约束，
+  不随词表大小保留全部扩展；`session.scratch_report()` 可查看当前规模。
+- **查询**：`session.status()` 报告两池视图与未到分片；`session.explain()` 区分
+  空池是语法层面无候选、预算用尽，还是仍有分片可能改写结果。
+
+回放采集记录并打印每轮定案轨迹：
+
+```sh
+python -m segbeam.adapter data/capture.json
+```
